@@ -155,7 +155,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (req.method !== 'POST') return res.status(405).end()
 
   const { action, messages, transcript, seed } = req.body as {
-    action: 'chat' | 'opening' | 'summary'
+    action: 'chat' | 'opening' | 'summary' | 'demo'
     messages?: { role: 'user' | 'assistant'; content: string }[]
     transcript?: string
     seed?: string
@@ -178,8 +178,32 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(200).json({ result: raw.replace(/```json|```/g, '').trim() })
     }
 
-    const s = seed || 'a'
-    const persona = getPersona(s)
+    if (action === 'demo') {
+      const { question } = req.body as { question: string }
+      const response = await client.messages.create({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 600,
+        system: `You are a master Sandler Sales trainer demonstrating perfect Stroke + Return technique for Fahrenheit One gym membership sales.
+
+FAHRENHEIT ONE FACTS:
+${F1_KNOWLEDGE}
+
+When given a prospect question, respond with ONLY valid JSON — no markdown, no preamble:
+{
+  "stroke": "<the exact stroke words to say — warm, natural acknowledgment>",
+  "return": "<the exact return question to ask — curious, non-defensive, redirects to their situation>",
+  "combined": "<stroke + return as one natural flowing sentence the salesperson would say out loud>",
+  "why_stroke": "<one sentence on why this stroke works>",
+  "why_return": "<one sentence on why this return question is effective>",
+  "what_to_listen_for": "<what answer from the prospect would tell you most about their real pain or motivation>"
+}`,
+        messages: [{ role: 'user', content: `Prospect said: "${question}"` }],
+      })
+      const raw = response.content[0].type === 'text' ? response.content[0].text : '{}'
+      return res.status(200).json({ result: raw.replace(/```json|```/g, '').trim() })
+    }
+
+
     const response = await client.messages.create({
       model: 'claude-sonnet-4-20250514',
       max_tokens: 200,
@@ -193,3 +217,4 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     res.status(500).json({ error: 'Internal error' })
   }
 }
+// Note: demo mode handler is included in the main handler below via action: 'demo'

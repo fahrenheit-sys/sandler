@@ -2,15 +2,23 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import { useDeepgram } from '../lib/useDeepgram'
 import { useTTS, unlockAudio } from '../lib/useTTS'
 
-const VERSION = 'v1.3'
+const VERSION = 'v1.4'
 
-type SessionState = 'start' | 'tap-to-begin' | 'session' | 'summary'
+type SessionState = 'start' | 'tap-to-begin' | 'session' | 'summary' | 'demo'
 type TurnState = 'prospect' | 'listening' | 'thinking' | 'speaking' | 'ending'
 
 interface Message { role: 'user' | 'assistant'; content: string }
 interface TranscriptLine { speaker: 'prospect' | 'you'; text: string }
 interface Alternative { prospect_line: string; salesperson_said: string; stroke: string; return: string; why: string }
 interface SummaryData { overall_assessment: string; alternatives: Alternative[] }
+interface DemoResult {
+  stroke: string
+  return: string
+  combined: string
+  why_stroke: string
+  why_return: string
+  what_to_listen_for: string
+}
 
 export default function SandlerSession({ autostart = false }: { autostart?: boolean }) {
   const [screen, setScreen] = useState<SessionState>('start')
@@ -21,6 +29,10 @@ export default function SandlerSession({ autostart = false }: { autostart?: bool
   const [duration, setDuration] = useState(0)
   const [summary, setSummary] = useState<SummaryData | null>(null)
   const [summaryLoading, setSummaryLoading] = useState(false)
+  const [demoQuestion, setDemoQuestion] = useState('')
+  const [demoResult, setDemoResult] = useState<DemoResult | null>(null)
+  const [demoLoading, setDemoLoading] = useState(false)
+  const [demoHistory, setDemoHistory] = useState<{ question: string; result: DemoResult }[]>([])
 
   const messagesRef = useRef<Message[]>([])
   const transcriptRef = useRef<TranscriptLine[]>([])
@@ -100,7 +112,7 @@ export default function SandlerSession({ autostart = false }: { autostart?: bool
     messagesRef.current = []
     transcriptRef.current = []
     seedRef.current = String.fromCharCode(65 + Math.floor(Math.random() * 26))
-  }, [stopTTS])
+  }, [stopTTS, stopSTT])
 
   const handleReview = useCallback(async () => {
     setTurn('ending')
@@ -129,7 +141,7 @@ export default function SandlerSession({ autostart = false }: { autostart?: bool
       }
     } catch { setSummary(null) }
     setSummaryLoading(false)
-  }, [stopTTS, speak])
+  }, [stopSTT, stopTTS, speak])
 
   const handleUserSpeech = useCallback(async (text: string) => {
     if (!text.trim()) { setTurn('listening'); return }
@@ -202,26 +214,149 @@ export default function SandlerSession({ autostart = false }: { autostart?: bool
       <div style={s.screen}>
         <div style={s.startInner}>
           <div style={{ fontSize: 11, letterSpacing: '0.2em', color: '#999', marginBottom: 12, textTransform: 'uppercase' as const }}>Sandler Trainer · {VERSION}</div>
-          <h1 style={{ fontSize: 40, fontWeight: 700, color: '#000', letterSpacing: '-0.02em', marginBottom: 6 }}>Stroke + Return</h1>
-          <p style={{ fontSize: 15, color: '#666', marginBottom: 48, fontWeight: 400 }}>Gym membership sales simulation</p>
+          <h1 style={{ fontSize: 36, fontWeight: 700, color: '#000', letterSpacing: '-0.02em', marginBottom: 6 }}>Stroke + Return</h1>
+          <p style={{ fontSize: 15, color: '#666', marginBottom: 36, fontWeight: 400 }}>Fahrenheit One · Sales Training</p>
 
-          <div style={s.infoBlock}>
-            {[
-              ['A random prospect opens with a question about price, features, or commitment.', '1'],
-              ['Respond with a stroke — warm acknowledgment — then a return question.', '2'],
-              ['Hands-free once started. Say "end" or tap the button to finish.', '3'],
-              ['Receive verbal coaching on 3 better alternatives.', '4'],
-            ].map(([text, num]) => (
-              <div key={num} style={s.infoRow}>
-                <div style={s.infoNum}>{num}</div>
-                <div style={{ fontSize: 14, color: '#444', lineHeight: 1.5 }}>{text}</div>
+          <div style={{ width: '100%', maxWidth: 360, display: 'flex', flexDirection: 'column' as const, gap: 12, marginBottom: 16 }}>
+            <button onClick={() => { unlockAudio(); startSession() }} style={s.modeCard}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: '#000', letterSpacing: '0.04em' }}>YOU ANSWER</div>
+                <div style={{ fontSize: 10, color: '#999', background: '#f0f0f0', padding: '2px 8px', borderRadius: 20 }}>Mode 1</div>
               </div>
+              <div style={{ fontSize: 13, color: '#555', lineHeight: 1.55 }}>A prospect asks a Fahrenheit One question. You respond with stroke + return. Get coached on your technique.</div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: '#000', marginTop: 12 }}>Start session →</div>
+            </button>
+
+            <button onClick={() => { setDemoResult(null); setDemoQuestion(''); setScreen('demo') }} style={{ ...s.modeCard, background: '#000', borderColor: '#000' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: '#fff', letterSpacing: '0.04em' }}>WATCH & LEARN</div>
+                <div style={{ fontSize: 10, color: '#888', background: '#222', padding: '2px 8px', borderRadius: 20 }}>Mode 2</div>
+              </div>
+              <div style={{ fontSize: 13, color: '#aaa', lineHeight: 1.55 }}>Type any prospect question. The AI shows the perfect stroke + return and explains why it works.</div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: '#fff', marginTop: 12 }}>Try it →</div>
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // ── DEMO (Watch & Learn) ──
+  if (screen === 'demo') {
+    const handleDemo = async () => {
+      if (!demoQuestion.trim()) return
+      setDemoLoading(true)
+      setDemoResult(null)
+      try {
+        const res = await fetch('/api/chat', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'demo', question: demoQuestion }),
+        })
+        const { result } = await res.json()
+        const parsed = JSON.parse(result)
+        setDemoResult(parsed)
+        setDemoHistory(h => [{ question: demoQuestion, result: parsed }, ...h.slice(0, 9)])
+        // Speak the combined response
+        unlockAudio()
+        speak(parsed.combined, () => {})
+      } catch { setDemoResult(null) }
+      setDemoLoading(false)
+    }
+
+    return (
+      <div style={s.screen}>
+        <div style={s.header}>
+          <span style={{ fontSize: 15, fontWeight: 600, color: '#000' }}>Watch & Learn</span>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <span style={{ fontSize: 11, color: '#ccc' }}>{VERSION}</span>
+            <button onClick={() => { stopTTS(); setScreen('start') }} style={{ fontSize: 13, color: '#999', background: 'none', border: 'none', cursor: 'pointer' }}>← Back</button>
+          </div>
+        </div>
+
+        <div style={{ flex: 1, overflowY: 'auto' as const, padding: '20px 20px 0' }}>
+          <p style={{ fontSize: 13, color: '#999', lineHeight: 1.6, marginBottom: 20 }}>
+            Type a prospect question below. The AI will show you the perfect Sandler stroke + return, speak it aloud, and explain why it works.
+          </p>
+
+          {/* Quick suggestion chips */}
+          <div style={{ display: 'flex', flexWrap: 'wrap' as const, gap: 8, marginBottom: 20 }}>
+            {[
+              'How much does a membership cost?',
+              'Can I cancel anytime?',
+              'What makes you different from other gyms?',
+              'Is this connected to the Jewish community?',
+              'Why would I join something not opening until 2027?',
+              'I already pay for a Pilates studio — why would I switch?',
+            ].map(q => (
+              <button key={q} onClick={() => setDemoQuestion(q)} style={{ fontSize: 11, color: '#555', background: '#f5f5f7', border: 'none', padding: '6px 12px', borderRadius: 20, cursor: 'pointer', textAlign: 'left' as const, lineHeight: 1.4 }}>
+                {q}
+              </button>
             ))}
           </div>
 
-          <button onClick={() => { unlockAudio(); startSession() }} style={{ ...s.primaryBtn, width: '100%', maxWidth: 360 }}>
-            Begin Session
-          </button>
+          {/* Input */}
+          <div style={{ display: 'flex', gap: 10, marginBottom: 24 }}>
+            <input
+              value={demoQuestion}
+              onChange={e => setDemoQuestion(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && handleDemo()}
+              placeholder="Type a prospect question…"
+              style={{ flex: 1, padding: '14px 16px', borderRadius: 12, border: '1.5px solid #e0e0e0', fontSize: 14, color: '#000', outline: 'none', background: '#fff' }}
+            />
+            <button onClick={handleDemo} disabled={demoLoading || !demoQuestion.trim()} style={{ padding: '14px 20px', background: '#000', color: '#fff', border: 'none', borderRadius: 12, fontSize: 14, fontWeight: 600, cursor: 'pointer', opacity: demoLoading || !demoQuestion.trim() ? 0.4 : 1 }}>
+              {demoLoading ? '…' : 'Go'}
+            </button>
+          </div>
+
+          {/* Result */}
+          {demoResult && (
+            <div style={{ animation: 'fade-in 0.3s ease' }}>
+              <div style={{ background: '#f5f5f7', borderRadius: 14, padding: '20px', marginBottom: 16 }}>
+                <div style={{ fontSize: 10, letterSpacing: '0.15em', color: '#999', marginBottom: 12, textTransform: 'uppercase' as const }}>Prospect said</div>
+                <div style={{ fontSize: 14, color: '#333', fontStyle: 'italic', marginBottom: 16 }}>&ldquo;{demoQuestion}&rdquo;</div>
+
+                <div style={{ fontSize: 10, letterSpacing: '0.15em', color: '#999', marginBottom: 8, textTransform: 'uppercase' as const }}>Perfect Response</div>
+                <div style={{ fontSize: 15, color: '#000', lineHeight: 1.65, fontWeight: 500, marginBottom: 16, padding: '14px', background: '#fff', borderRadius: 10, borderLeft: '3px solid #000' }}>
+                  &ldquo;{demoResult.combined}&rdquo;
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 16 }}>
+                  <div style={{ background: '#fff', borderRadius: 10, padding: '12px' }}>
+                    <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.15em', color: '#000', marginBottom: 6 }}>STROKE</div>
+                    <div style={{ fontSize: 12, color: '#333', lineHeight: 1.5, marginBottom: 8, fontStyle: 'italic' }}>&ldquo;{demoResult.stroke}&rdquo;</div>
+                    <div style={{ fontSize: 11, color: '#888', lineHeight: 1.4 }}>{demoResult.why_stroke}</div>
+                  </div>
+                  <div style={{ background: '#fff', borderRadius: 10, padding: '12px' }}>
+                    <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.15em', color: '#000', marginBottom: 6 }}>RETURN</div>
+                    <div style={{ fontSize: 12, color: '#333', lineHeight: 1.5, marginBottom: 8, fontStyle: 'italic' }}>&ldquo;{demoResult.return}&rdquo;</div>
+                    <div style={{ fontSize: 11, color: '#888', lineHeight: 1.4 }}>{demoResult.why_return}</div>
+                  </div>
+                </div>
+
+                <div style={{ background: '#fff', borderRadius: 10, padding: '12px' }}>
+                  <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.15em', color: '#000', marginBottom: 6 }}>LISTEN FOR</div>
+                  <div style={{ fontSize: 12, color: '#555', lineHeight: 1.5 }}>{demoResult.what_to_listen_for}</div>
+                </div>
+              </div>
+
+              <button onClick={() => { speak(demoResult!.combined, () => {}) }} style={{ ...s.secondaryBtn, width: '100%', marginBottom: 24 }}>
+                ▶ Play Again
+              </button>
+            </div>
+          )}
+
+          {/* History */}
+          {demoHistory.length > 1 && (
+            <div style={{ marginBottom: 24 }}>
+              <div style={{ fontSize: 10, letterSpacing: '0.15em', color: '#ccc', marginBottom: 12, textTransform: 'uppercase' as const }}>Previous</div>
+              {demoHistory.slice(1).map((h, i) => (
+                <button key={i} onClick={() => { setDemoQuestion(h.question); setDemoResult(h.result); speak(h.result.combined, () => {}) }} style={{ width: '100%', textAlign: 'left' as const, background: '#f5f5f7', border: 'none', borderRadius: 10, padding: '12px', marginBottom: 8, cursor: 'pointer' }}>
+                  <div style={{ fontSize: 12, color: '#333', lineHeight: 1.4 }}>&ldquo;{h.question}&rdquo;</div>
+                  <div style={{ fontSize: 11, color: '#999', marginTop: 4 }}>{h.result.stroke.substring(0, 40)}…</div>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     )
@@ -403,6 +538,8 @@ export default function SandlerSession({ autostart = false }: { autostart?: bool
 const s: Record<string, React.CSSProperties> = {
   screen: { height: '100dvh', background: '#fff', display: 'flex', flexDirection: 'column', paddingBottom: 'env(safe-area-inset-bottom)' },
   startInner: { flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'flex-start', justifyContent: 'center', padding: '40px 28px' },
+  modeCard: { width: '100%', textAlign: 'left' as const, padding: '20px', background: '#fff', border: '1.5px solid #e8e8e8', borderRadius: 16, cursor: 'pointer', transition: 'all 0.15s ease' },
+  secondaryBtn: { flex: 1, padding: '16px', background: '#f5f5f7', border: 'none', borderRadius: 14, fontSize: 15, fontWeight: 600, color: '#000', cursor: 'pointer', transition: 'opacity 0.2s', letterSpacing: '-0.01em' },
   infoBlock: { display: 'flex', flexDirection: 'column', gap: 16, marginBottom: 40, width: '100%', maxWidth: 360 },
   infoRow: { display: 'flex', gap: 14, alignItems: 'flex-start' },
   infoNum: { width: 24, height: 24, borderRadius: '50%', background: '#000', color: '#fff', fontSize: 12, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: 1 },
