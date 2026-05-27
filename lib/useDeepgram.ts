@@ -30,7 +30,7 @@ export function useDeepgram({ onTranscript, onUtteranceEnd, onError }: DeepgramO
       streamRef.current = stream
 
       const ws = new WebSocket(
-        `wss://api.deepgram.com/v1/listen?model=nova-2&language=en&smart_format=true&interim_results=true&utterance_end_ms=1200&vad_events=true&endpointing=400`,
+        `wss://api.deepgram.com/v1/listen?model=nova-2&language=en&smart_format=true&interim_results=true&utterance_end_ms=2500&vad_events=true&endpointing=800`,
         ['token', key]
       )
       wsRef.current = ws
