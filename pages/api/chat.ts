@@ -219,7 +219,7 @@ When given a prospect question, respond with ONLY valid JSON — no markdown, no
     const response = await client.messages.create({
       model: 'claude-sonnet-4-20250514',
       max_tokens: 200,
-      system: PROSPECT_SYSTEM(persona.desc),
+      system: PROSPECT_SYSTEM(getPersona(seed || "a").desc),
       messages: messages || [],
     })
     const text = response.content[0].type === 'text' ? response.content[0].text : ''
