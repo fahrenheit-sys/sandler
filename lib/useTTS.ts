@@ -1,83 +1,100 @@
 import { useRef, useCallback } from 'react'
 
-let sharedAudioContext: AudioContext | null = null
 let abortFlag = false
+let sharedAudio: HTMLAudioElement | null = null
 
 export function unlockAudio() {
-  if (!sharedAudioContext) {
-    sharedAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
-  }
-  if (sharedAudioContext.state === 'suspended') {
-    sharedAudioContext.resume()
-  }
-  // Play silent buffer — fully unlocks iOS audio engine
-  const buffer = sharedAudioContext.createBuffer(1, 1, 22050)
-  const source = sharedAudioContext.createBufferSource()
-  source.buffer = buffer
-  source.connect(sharedAudioContext.destination)
-  source.start(0)
   abortFlag = false
-}
-
-function getAudioContext(): AudioContext {
-  if (!sharedAudioContext) {
-    sharedAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
+  if (!sharedAudio) {
+    sharedAudio = new Audio()
   }
-  return sharedAudioContext
+  sharedAudio.volume = 1
+  // Play silent WAV to unlock
+  sharedAudio.src = 'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA'
+  sharedAudio.play().catch(() => {})
 }
 
 export function useTTS() {
-  const sourceNodeRef = useRef<AudioBufferSourceNode | null>(null)
+  const blobUrlRef = useRef<string | null>(null)
 
   const stop = useCallback(() => {
     abortFlag = true
-    if (sourceNodeRef.current) {
-      try { sourceNodeRef.current.stop() } catch {}
-      sourceNodeRef.current = null
+    if (sharedAudio) {
+      sharedAudio.pause()
+      sharedAudio.onended = null
+      sharedAudio.onerror = null
+    }
+    if (blobUrlRef.current) {
+      URL.revokeObjectURL(blobUrlRef.current)
+      blobUrlRef.current = null
     }
     setTimeout(() => { abortFlag = false }, 50)
   }, [])
 
-  const speak = useCallback(async (text: string, onEnd: () => void): Promise<void> => {
+  const speak = useCallback(async (text: string, onEnd: () => void, mode?: string): Promise<void> => {
     abortFlag = false
-    if (sourceNodeRef.current) {
-      try { sourceNodeRef.current.stop() } catch {}
-      sourceNodeRef.current = null
+
+    // Stop current audio
+    if (sharedAudio) {
+      sharedAudio.pause()
+      sharedAudio.onended = null
+      sharedAudio.onerror = null
+    }
+    if (blobUrlRef.current) {
+      URL.revokeObjectURL(blobUrlRef.current)
+      blobUrlRef.current = null
     }
 
     try {
-      const ctx = getAudioContext()
-      // Always try to resume — iOS may have suspended it
-      if (ctx.state === 'suspended') {
-        await ctx.resume()
-      }
-
       const res = await fetch('/api/tts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text }),
+        body: JSON.stringify({ text, mode }),
       })
       if (!res.ok) throw new Error('TTS failed')
       if (abortFlag) return
 
-      const arrayBuffer = await res.arrayBuffer()
+      const blob = await res.blob()
       if (abortFlag) return
 
-      const audioBuffer = await ctx.decodeAudioData(arrayBuffer)
-      if (abortFlag) return
+      const url = URL.createObjectURL(blob)
+      blobUrlRef.current = url
 
-      // Resume again after async gap — iOS can re-suspend
-      if (ctx.state === 'suspended') await ctx.resume()
+      // Always use the shared element — it stays unlocked from the gesture
+      if (!sharedAudio) sharedAudio = new Audio()
+      sharedAudio.volume = 1
+      sharedAudio.src = url
 
-      const source = ctx.createBufferSource()
-      source.buffer = audioBuffer
-      source.connect(ctx.destination)
-      sourceNodeRef.current = source
-      source.onended = () => {
-        sourceNodeRef.current = null
+      sharedAudio.onended = () => {
+        if (blobUrlRef.current === url) {
+          URL.revokeObjectURL(url)
+          blobUrlRef.current = null
+        }
+        if (sharedAudio) {
+          sharedAudio.onended = null
+          sharedAudio.onerror = null
+        }
         if (!abortFlag) onEnd()
       }
-      source.start(0)
+
+      sharedAudio.onerror = (e) => {
+        console.error('Audio error:', e)
+        if (blobUrlRef.current === url) {
+          URL.revokeObjectURL(url)
+          blobUrlRef.current = null
+        }
+        if (!abortFlag) onEnd()
+      }
+
+      // Load then play — more reliable than just setting src and playing
+      sharedAudio.load()
+      const playPromise = sharedAudio.play()
+      if (playPromise) {
+        playPromise.catch(err => {
+          console.error('Play failed:', err)
+          if (!abortFlag) onEnd()
+        })
+      }
     } catch (err) {
       console.error('TTS error:', err)
       if (!abortFlag) onEnd()
