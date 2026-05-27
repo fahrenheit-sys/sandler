@@ -2,6 +2,22 @@ import { useRef, useCallback } from 'react'
 
 let sharedAudioContext: AudioContext | null = null
 
+export function unlockAudio() {
+  // Must be called directly from a user gesture (tap/click)
+  if (!sharedAudioContext) {
+    sharedAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
+  }
+  if (sharedAudioContext.state === 'suspended') {
+    sharedAudioContext.resume()
+  }
+  // Play a silent buffer to fully unlock iOS audio
+  const buffer = sharedAudioContext.createBuffer(1, 1, 22050)
+  const source = sharedAudioContext.createBufferSource()
+  source.buffer = buffer
+  source.connect(sharedAudioContext.destination)
+  source.start(0)
+}
+
 function getAudioContext(): AudioContext {
   if (!sharedAudioContext) {
     sharedAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)()

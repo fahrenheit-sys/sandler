@@ -1,16 +1,33 @@
 import Head from 'next/head'
 import { useEffect, useState } from 'react'
 import SandlerSession from '../components/SandlerSession'
+import { unlockAudio } from '../lib/useTTS'
 
 export default function Home() {
   const [autostart, setAutostart] = useState(false)
   const [ready, setReady] = useState(false)
 
   useEffect(() => {
-    // Read autostart from URL directly — more reliable than useRouter on mobile
     const params = new URLSearchParams(window.location.search)
-    setAutostart(params.get('autostart') === 'true')
+    const isAutostart = params.get('autostart') === 'true'
+    setAutostart(isAutostart)
     setReady(true)
+
+    if (isAutostart) {
+      // Unlock iOS audio on the first user interaction with the page
+      // Siri opening Safari counts as a gesture context on iOS 16+
+      // We also attach to the first touch as a fallback
+      const unlock = () => {
+        unlockAudio()
+        document.removeEventListener('touchstart', unlock)
+        document.removeEventListener('click', unlock)
+      }
+      // Try immediately (works if Siri launch counts as gesture)
+      try { unlockAudio() } catch {}
+      // Also attach to first touch as fallback
+      document.addEventListener('touchstart', unlock, { once: true })
+      document.addEventListener('click', unlock, { once: true })
+    }
   }, [])
 
   if (!ready) return null
