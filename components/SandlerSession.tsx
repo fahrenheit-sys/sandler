@@ -146,7 +146,7 @@ export default function SandlerSession({ autostart = false }: { autostart?: bool
       setStatusText('Error — speak again')
       setTimeout(() => resumeSTT(), 400)
     }
-  }, [speak, stopTTS, pauseSTT, resumeSTT])
+  }, [speak, stopTTS])
 
   const handleTranscript = useCallback((text: string, _isFinal: boolean) => {
     if (turnStateRef.current === 'listening') setInterimText(text)
