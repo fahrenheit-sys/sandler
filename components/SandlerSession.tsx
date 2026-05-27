@@ -374,7 +374,7 @@ export default function SandlerSession({ autostart = false }: { autostart?: bool
           {[110, 128].map((size, i) => (
             <div key={i} style={{ position: 'absolute' as const, width: size, height: size, borderRadius: '50%', border: `1px solid ${ACCENT}`, opacity: ringOpacity * (i === 0 ? 1 : 0.5), animation: ringOpacity > 0 ? `pulse-ring 1.2s ease-in-out ${i * 0.2}s infinite` : 'none', transition: 'opacity 0.4s' }} />
           ))}
-          <div style={{ width: 72, height: 72, borderRadius: '50%', background: `radial-gradient(circle at 35% 35%, ${ACCENT}, #5a3800)`, boxShadow: `0 0 ${turnState === 'idle' ? 15 : 35}px ${ACCENT}${turnState === 'listening' ? '55' : '33'}`, animation: orbAnim, transition: 'box-shadow 0.4s' }} />
+          <div style={{ width: 72, height: 72, borderRadius: '50%', background: `radial-gradient(circle at 35% 35%, ${ACCENT}, #5a3800)`, boxShadow: `0 0 ${35}px ${ACCENT}${turnState === 'listening' ? '55' : '33'}`, animation: orbAnim, transition: 'box-shadow 0.4s' }} />
         </div>
 
         <div style={{ fontSize: 11, letterSpacing: '0.14em', color: 'rgba(255,255,255,0.3)', textTransform: 'uppercase' as const }}>
