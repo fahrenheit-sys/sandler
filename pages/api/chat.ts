@@ -121,18 +121,26 @@ ${F1_KNOWLEDGE}
 BEHAVIOUR RULES:
 - Stay completely in character as the prospect
 - Ask natural, specific follow-up questions about Fahrenheit One
-- React authentically — if they give a good Sandler stroke+return, warm up slightly
-- If they answer your question directly without a stroke or curious return, press harder or repeat concern
+- The IDEAL salesperson response you reward: brief genuine answer to your question + warm acknowledgment + curious return question that digs into your situation
+- If they give ONLY Sandler technique (stroke+return) without any real information, push back naturally: "You still haven't really answered my question" or press harder
+- If they give ONLY information without any curiosity or return question, give a flat transactional response and wait — don't warm up
+- If they balance genuine information WITH a curious return question, warm up, engage more, open up about your real situation
 - Keep responses SHORT — 1-3 sentences like a real prospect
-- Reference real details (price, location, Hakoah, eGym, 2027 opening, etc.) naturally
+- Reference real Fahrenheit One details naturally (pricing, eGym, Hakoah, 2027 opening, reformer Pilates etc.)
 - Do NOT break character or reference Sandler
 - If the user says "end" or "stop", respond naturally: "Ok, thanks for your time."`
 
 const SUMMARY_SYSTEM = `You are a Sandler Sales Method coach specialising in premium fitness and wellness sales. Analyse this Fahrenheit One membership sales conversation and give feedback on the salesperson's use of Stroke + Return.
 
-A STROKE is a softening compliment before responding (e.g. "Great question", "That's really important", "I completely understand").
+The Sandler STROKE + RETURN technique works best when balanced with genuine information.
 
-A RETURN is a curious question that redirects to the prospect's situation instead of answering directly (e.g. "Why do you ask?", "What's making price the main focus right now?", "Have you had a bad experience with a gym contract before?").
+The ideal response structure is: STROKE (warm acknowledgment) + BRIEF GENUINE ANSWER (give them real information) + RETURN (curious question about their specific situation).
+
+A STROKE is a softening acknowledgment before responding (e.g. "Great question", "That's really important", "I completely understand — pricing is always worth understanding upfront").
+
+A RETURN is a curious question that digs into the prospect's specific situation (e.g. "What's making price the main focus right now?", "Have you had a bad experience with a gym contract before?", "What does your current fitness routine look like?").
+
+The mistake to avoid: pure Sandler with no information (dodging the question entirely) OR pure information with no curiosity (answering like a brochure). The best salespeople do both.
 
 Return ONLY valid JSON — no markdown, no preamble:
 
@@ -188,14 +196,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 FAHRENHEIT ONE FACTS:
 ${F1_KNOWLEDGE}
 
+The ideal Sandler response for premium fitness sales is: STROKE + BRIEF GENUINE ANSWER + RETURN.
+Not pure Sandler (dodging), not pure info (brochure). A balance.
+
 When given a prospect question, respond with ONLY valid JSON — no markdown, no preamble:
 {
-  "stroke": "<the exact stroke words to say — warm, natural acknowledgment>",
-  "return": "<the exact return question to ask — curious, non-defensive, redirects to their situation>",
-  "combined": "<stroke + return as one natural flowing sentence the salesperson would say out loud>",
+  "stroke": "<warm natural acknowledgment — 1 sentence>",
+  "info": "<brief genuine answer to their question using Fahrenheit One facts — 1-2 sentences max>",
+  "return": "<curious return question about their specific situation — 1 sentence>",
+  "combined": "<stroke + info + return as one natural flowing response the salesperson would say out loud>",
   "why_stroke": "<one sentence on why this stroke works>",
   "why_return": "<one sentence on why this return question is effective>",
-  "what_to_listen_for": "<what answer from the prospect would tell you most about their real pain or motivation>"
+  "what_to_listen_for": "<what the prospect's answer reveals about their real motivation or pain>"
 }`,
         messages: [{ role: 'user', content: `Prospect said: "${question}"` }],
       })
@@ -207,7 +219,7 @@ When given a prospect question, respond with ONLY valid JSON — no markdown, no
     const response = await client.messages.create({
       model: 'claude-sonnet-4-20250514',
       max_tokens: 200,
-      system: PROSPECT_SYSTEM(getPersona(seed || 'a').desc),
+      system: PROSPECT_SYSTEM(persona.desc),
       messages: messages || [],
     })
     const text = response.content[0].type === 'text' ? response.content[0].text : ''

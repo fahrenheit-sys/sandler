@@ -70,11 +70,22 @@ export default function SandlerSession({ autostart = false }: { autostart?: bool
     timerRef.current = setInterval(() => setDuration(d => d + 1), 1000)
   }, [speak])
 
-  // Autostart — show tap-to-begin screen with countdown
+  // Autostart — countdown then go straight to session
   useEffect(() => {
     if (!autostart) return
     setScreen('tap-to-begin')
     setCountdown(3)
+    let count = 3
+    const interval = setInterval(() => {
+      count -= 1
+      setCountdown(count)
+      if (count <= 0) {
+        clearInterval(interval)
+        unlockAudio()
+        startSession()
+      }
+    }, 1000)
+    return () => clearInterval(interval)
   }, [autostart])
 
   useEffect(() => {
@@ -112,7 +123,7 @@ export default function SandlerSession({ autostart = false }: { autostart?: bool
     messagesRef.current = []
     transcriptRef.current = []
     seedRef.current = String.fromCharCode(65 + Math.floor(Math.random() * 26))
-  }, [stopTTS])
+  }, [stopTTS, stopSTT])
 
   const handleReview = useCallback(async () => {
     setTurn('ending')
@@ -141,7 +152,7 @@ export default function SandlerSession({ autostart = false }: { autostart?: bool
       }
     } catch { setSummary(null) }
     setSummaryLoading(false)
-  }, [stopTTS, speak])
+  }, [stopSTT, stopTTS, speak])
 
   const handleUserSpeech = useCallback(async (text: string) => {
     if (!text.trim()) { setTurn('listening'); return }
@@ -320,15 +331,21 @@ export default function SandlerSession({ autostart = false }: { autostart?: bool
                   &ldquo;{demoResult.combined}&rdquo;
                 </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 16 }}>
+                <div style={{ display: 'flex', flexDirection: 'column' as const, gap: 8, marginBottom: 16 }}>
                   <div style={{ background: '#fff', borderRadius: 10, padding: '12px' }}>
-                    <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.15em', color: '#000', marginBottom: 6 }}>STROKE</div>
-                    <div style={{ fontSize: 12, color: '#333', lineHeight: 1.5, marginBottom: 8, fontStyle: 'italic' }}>&ldquo;{demoResult.stroke}&rdquo;</div>
+                    <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.15em', color: '#000', marginBottom: 6 }}>① STROKE</div>
+                    <div style={{ fontSize: 12, color: '#333', lineHeight: 1.5, marginBottom: 6, fontStyle: 'italic' }}>&ldquo;{demoResult.stroke}&rdquo;</div>
                     <div style={{ fontSize: 11, color: '#888', lineHeight: 1.4 }}>{demoResult.why_stroke}</div>
                   </div>
+                  {(demoResult as any).info && (
+                    <div style={{ background: '#fff', borderRadius: 10, padding: '12px' }}>
+                      <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.15em', color: '#555', marginBottom: 6 }}>② ANSWER</div>
+                      <div style={{ fontSize: 12, color: '#333', lineHeight: 1.5, fontStyle: 'italic' }}>&ldquo;{(demoResult as any).info}&rdquo;</div>
+                    </div>
+                  )}
                   <div style={{ background: '#fff', borderRadius: 10, padding: '12px' }}>
-                    <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.15em', color: '#000', marginBottom: 6 }}>RETURN</div>
-                    <div style={{ fontSize: 12, color: '#333', lineHeight: 1.5, marginBottom: 8, fontStyle: 'italic' }}>&ldquo;{demoResult.return}&rdquo;</div>
+                    <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.15em', color: '#000', marginBottom: 6 }}>③ RETURN</div>
+                    <div style={{ fontSize: 12, color: '#333', lineHeight: 1.5, marginBottom: 6, fontStyle: 'italic' }}>&ldquo;{demoResult.return}&rdquo;</div>
                     <div style={{ fontSize: 11, color: '#888', lineHeight: 1.4 }}>{demoResult.why_return}</div>
                   </div>
                 </div>
@@ -362,22 +379,14 @@ export default function SandlerSession({ autostart = false }: { autostart?: bool
     )
   }
 
-  // ── TAP TO BEGIN (autostart) ──
+  // ── COUNTDOWN (autostart via Siri) ──
   if (screen === 'tap-to-begin') {
     return (
       <div style={s.screen}>
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column' as const, alignItems: 'center', justifyContent: 'center', gap: 32, padding: 40 }}>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column' as const, alignItems: 'center', justifyContent: 'center', gap: 20 }}>
           <div style={{ fontSize: 11, letterSpacing: '0.2em', color: '#999', textTransform: 'uppercase' as const }}>Sandler Trainer · {VERSION}</div>
-          <h2 style={{ fontSize: 28, fontWeight: 600, color: '#000', letterSpacing: '-0.01em', textAlign: 'center' as const }}>Ready to train?</h2>
-          <button
-            onClick={handleTapToBegin}
-            style={{ ...s.primaryBtn, fontSize: 20, padding: '24px 48px', borderRadius: 20 }}
-          >
-            Tap to Begin
-          </button>
-          <p style={{ fontSize: 13, color: '#999', textAlign: 'center' as const, maxWidth: 260, lineHeight: 1.5 }}>
-            One tap unlocks audio on iPhone, then it's fully hands-free
-          </p>
+          <div style={{ fontSize: 96, fontWeight: 100, color: '#000', lineHeight: 1, animation: 'countdown-pop 0.4s ease' }}>{countdown}</div>
+          <div style={{ fontSize: 14, color: '#999' }}>Starting session…</div>
         </div>
       </div>
     )
@@ -544,6 +553,7 @@ const s: Record<string, React.CSSProperties> = {
   infoRow: { display: 'flex', gap: 14, alignItems: 'flex-start' },
   infoNum: { width: 24, height: 24, borderRadius: '50%', background: '#000', color: '#fff', fontSize: 12, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: 1 },
   primaryBtn: { flex: 1, padding: '16px', background: '#000', border: 'none', borderRadius: 14, fontSize: 15, fontWeight: 600, color: '#fff', cursor: 'pointer', transition: 'opacity 0.2s', letterSpacing: '-0.01em' },
+  secondaryBtn: { flex: 1, padding: '16px', background: '#f5f5f7', border: 'none', borderRadius: 14, fontSize: 15, fontWeight: 600, color: '#000', cursor: 'pointer', transition: 'opacity 0.2s', letterSpacing: '-0.01em' },
   header: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '56px 20px 16px', borderBottom: '1px solid #f0f0f0', flexShrink: 0 },
   altCard: { background: '#f5f5f7', borderRadius: 12, padding: '16px', marginBottom: 12 },
   altRow: { display: 'flex', gap: 10, alignItems: 'flex-start', marginBottom: 8 },
