@@ -112,7 +112,7 @@ export default function SandlerSession({ autostart = false }: { autostart?: bool
     messagesRef.current = []
     transcriptRef.current = []
     seedRef.current = String.fromCharCode(65 + Math.floor(Math.random() * 26))
-  }, [stopTTS, stopSTT])
+  }, [stopTTS])
 
   const handleReview = useCallback(async () => {
     setTurn('ending')
