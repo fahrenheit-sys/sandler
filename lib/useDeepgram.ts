@@ -11,12 +11,14 @@ export function useDeepgram({ onTranscript, onUtteranceEnd, onError }: DeepgramO
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const accumulatedRef = useRef<string>('')
+  const pausedRef = useRef(false)
   const activeRef = useRef(false)
 
   const start = useCallback(async () => {
     if (activeRef.current) return
     activeRef.current = true
     accumulatedRef.current = ''
+    pausedRef.current = false
 
     try {
       const tokenRes = await fetch('/api/deepgram-token', { method: 'POST' })
@@ -39,18 +41,23 @@ export function useDeepgram({ onTranscript, onUtteranceEnd, onError }: DeepgramO
         const mr = new MediaRecorder(stream, { mimeType })
         mediaRecorderRef.current = mr
         mr.ondataavailable = (e) => {
-          if (e.data.size > 0 && ws.readyState === WebSocket.OPEN) ws.send(e.data)
+          // Only send audio when not paused
+          if (e.data.size > 0 && ws.readyState === WebSocket.OPEN && !pausedRef.current) {
+            ws.send(e.data)
+          }
         }
         mr.start(50)
       }
 
       ws.onmessage = (event) => {
+        if (pausedRef.current) return
         try {
           const data = JSON.parse(event.data)
           if (data.type === 'UtteranceEnd') {
             if (accumulatedRef.current.trim()) {
-              onUtteranceEnd(accumulatedRef.current.trim())
+              const text = accumulatedRef.current.trim()
               accumulatedRef.current = ''
+              onUtteranceEnd(text)
             }
             return
           }
@@ -73,8 +80,19 @@ export function useDeepgram({ onTranscript, onUtteranceEnd, onError }: DeepgramO
     }
   }, [onTranscript, onUtteranceEnd, onError])
 
+  const pause = useCallback(() => {
+    pausedRef.current = true
+    accumulatedRef.current = ''
+  }, [])
+
+  const resume = useCallback(() => {
+    accumulatedRef.current = ''
+    pausedRef.current = false
+  }, [])
+
   const stop = useCallback(() => {
     activeRef.current = false
+    pausedRef.current = false
     accumulatedRef.current = ''
     mediaRecorderRef.current?.stop()
     mediaRecorderRef.current = null
@@ -85,16 +103,6 @@ export function useDeepgram({ onTranscript, onUtteranceEnd, onError }: DeepgramO
     wsRef.current = null
     streamRef.current?.getTracks().forEach((t) => t.stop())
     streamRef.current = null
-  }, [])
-
-  const pause = useCallback(() => {
-    // Pause sending audio but keep stream open
-    mediaRecorderRef.current?.pause()
-  }, [])
-
-  const resume = useCallback(() => {
-    accumulatedRef.current = ''
-    mediaRecorderRef.current?.resume()
   }, [])
 
   return { start, stop, pause, resume }

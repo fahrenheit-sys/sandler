@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import { useDeepgram } from '../lib/useDeepgram'
 import { useTTS } from '../lib/useTTS'
 
-type SessionState = 'start' | 'session' | 'summary'
+type SessionState = 'start' | 'countdown' | 'session' | 'summary'
 type TurnState = 'prospect' | 'listening' | 'thinking' | 'speaking' | 'ending'
 
 interface Message { role: 'user' | 'assistant'; content: string }
@@ -24,8 +24,9 @@ interface SummaryData {
 const ACCENT = '#c9a84c'
 const ACCENT_DIM = '#c9a84c33'
 
-export default function SandlerSession() {
+export default function SandlerSession({ autostart = false }: { autostart?: boolean }) {
   const [screen, setScreen] = useState<SessionState>('start')
+  const [countdown, setCountdown] = useState(3)
   const [turnState, setTurnState] = useState<TurnState>('prospect')
   const [transcript, setTranscript] = useState<TranscriptLine[]>([])
   const [interimText, setInterimText] = useState('')
@@ -133,16 +134,19 @@ export default function SandlerSession() {
       pauseSTT()
 
       await speak(reply, () => {
-        setTurn('listening')
-        setStatusText('Your turn — speak naturally')
-        resumeSTT()
+        // Small delay before resuming so any TTS echo clears
+        setTimeout(() => {
+          setTurn('listening')
+          setStatusText('Your turn — speak naturally')
+          resumeSTT()
+        }, 400)
       })
     } catch {
       setTurn('listening')
       setStatusText('Error — speak again')
-      resumeSTT()
+      setTimeout(() => resumeSTT(), 400)
     }
-  }, [speak, stopTTS])
+  }, [speak, stopTTS, pauseSTT, resumeSTT])
 
   const handleTranscript = useCallback((text: string, _isFinal: boolean) => {
     if (turnStateRef.current === 'listening') setInterimText(text)
@@ -202,7 +206,39 @@ export default function SandlerSession() {
     }
   }, [])
 
+  // Autostart countdown when opened via Siri
+  useEffect(() => {
+    if (!autostart) return
+    setScreen('countdown')
+    setCountdown(3)
+    let count = 3
+    const interval = setInterval(() => {
+      count -= 1
+      setCountdown(count)
+      if (count <= 0) {
+        clearInterval(interval)
+        startSession()
+      }
+    }, 1000)
+    return () => clearInterval(interval)
+  }, [autostart])
+
   const fmt = (s: number) => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`
+
+  // ── COUNTDOWN SCREEN ──
+  if (screen === 'countdown') {
+    return (
+      <div style={{ ...s.screen, alignItems: 'center', justifyContent: 'center' }}>
+        <div style={{ fontSize: 11, letterSpacing: '0.3em', color: 'rgba(255,255,255,0.2)', marginBottom: 32 }}>◈ SANDLER TRAINER</div>
+        <div style={{ fontSize: 100, fontWeight: 100, color: ACCENT, lineHeight: 1, marginBottom: 24, animation: 'breathe 1s ease-in-out infinite' }}>
+          {countdown}
+        </div>
+        <div style={{ fontSize: 13, letterSpacing: '0.15em', color: 'rgba(255,255,255,0.3)', textTransform: 'uppercase' as const }}>
+          Starting session…
+        </div>
+      </div>
+    )
+  }
 
   // ── START SCREEN ──
   if (screen === 'start') {
@@ -338,7 +374,7 @@ export default function SandlerSession() {
           {[110, 128].map((size, i) => (
             <div key={i} style={{ position: 'absolute' as const, width: size, height: size, borderRadius: '50%', border: `1px solid ${ACCENT}`, opacity: ringOpacity * (i === 0 ? 1 : 0.5), animation: ringOpacity > 0 ? `pulse-ring 1.2s ease-in-out ${i * 0.2}s infinite` : 'none', transition: 'opacity 0.4s' }} />
           ))}
-          <div style={{ width: 72, height: 72, borderRadius: '50%', background: `radial-gradient(circle at 35% 35%, ${ACCENT}, #5a3800)`, boxShadow: `0 0 ${35}px ${ACCENT}${turnState === 'listening' ? '55' : '33'}`, animation: orbAnim, transition: 'box-shadow 0.4s' }} />
+          <div style={{ width: 72, height: 72, borderRadius: '50%', background: `radial-gradient(circle at 35% 35%, ${ACCENT}, #5a3800)`, boxShadow: `0 0 ${turnState === 'idle' ? 15 : 35}px ${ACCENT}${turnState === 'listening' ? '55' : '33'}`, animation: orbAnim, transition: 'box-shadow 0.4s' }} />
         </div>
 
         <div style={{ fontSize: 11, letterSpacing: '0.14em', color: 'rgba(255,255,255,0.3)', textTransform: 'uppercase' as const }}>
