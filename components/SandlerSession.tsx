@@ -229,7 +229,7 @@ export default function SandlerSession({ autostart = false }: { autostart?: bool
   if (screen === 'countdown') {
     return (
       <div style={{ ...s.screen, alignItems: 'center', justifyContent: 'center' }}>
-        <div style={{ fontSize: 11, letterSpacing: '0.3em', color: 'rgba(255,255,255,0.2)', marginBottom: 32 }}>◈ SANDLER TRAINER</div>
+        <div style={{ fontSize: 11, letterSpacing: '0.3em', color: 'rgba(255,255,255,0.2)', marginBottom: 32 }}>◈ SANDLER TRAINER · v1.2</div>
         <div style={{ fontSize: 100, fontWeight: 100, color: ACCENT, lineHeight: 1, marginBottom: 24, animation: 'breathe 1s ease-in-out infinite' }}>
           {countdown}
         </div>
@@ -245,7 +245,7 @@ export default function SandlerSession({ autostart = false }: { autostart?: bool
     return (
       <div style={s.screen}>
         <div style={s.startInner}>
-          <div style={{ fontSize: 11, letterSpacing: '0.3em', color: 'rgba(255,255,255,0.2)', marginBottom: 16 }}>◈ SANDLER</div>
+          <div style={{ fontSize: 11, letterSpacing: '0.3em', color: 'rgba(255,255,255,0.2)', marginBottom: 16 }}>◈ SANDLER · v1.2</div>
           <h1 style={{ fontSize: 36, fontWeight: 200, letterSpacing: '0.2em', color: 'rgba(255,255,255,0.9)', marginBottom: 8 }}>STROKE + RETURN</h1>
           <p style={{ fontSize: 11, letterSpacing: '0.15em', color: 'rgba(255,255,255,0.25)', marginBottom: 48, textTransform: 'uppercase' }}>Sandler Sales Trainer · Gym Membership</p>
 
@@ -363,8 +363,8 @@ export default function SandlerSession({ autostart = false }: { autostart?: bool
           </div>
           <span style={{ color: 'rgba(255,255,255,0.25)', fontSize: 11, fontFamily: 'monospace' }}>{fmt(duration)}</span>
         </div>
-        <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.15)', letterSpacing: '0.1em', textTransform: 'uppercase' as const }}>
-          Say "end" to finish
+        <span style={{ fontSize: 8, color: 'rgba(255,255,255,0.1)', letterSpacing: '0.1em', fontFamily: 'monospace' }}>
+          v1.2
         </span>
       </div>
 
@@ -413,9 +413,23 @@ export default function SandlerSession({ autostart = false }: { autostart?: bool
         ))}
       </div>
 
-      <div style={{ padding: '12px 20px 20px', flexShrink: 0 }}>
-        <p style={{ textAlign: 'center' as const, fontSize: 10, color: 'rgba(255,255,255,0.12)', letterSpacing: '0.06em' }}>
-          {transcript.length} exchanges · always listening · say "end" to finish
+      <div style={{ padding: '12px 20px 20px', flexShrink: 0, display: 'flex', flexDirection: 'column' as const, alignItems: 'center', gap: 10 }}>
+        <button
+          onClick={() => handleUserSpeech('end')}
+          disabled={turnState === 'ending'}
+          style={{
+            width: '100%', maxWidth: 340, padding: '14px',
+            background: 'transparent', border: '1px solid rgba(255,255,255,0.12)',
+            borderRadius: 10, fontSize: 11, letterSpacing: '0.14em',
+            color: 'rgba(255,255,255,0.3)', cursor: 'pointer',
+            textTransform: 'uppercase' as const, transition: 'all 0.2s',
+            opacity: turnState === 'ending' ? 0.4 : 1,
+          }}
+        >
+          ◼ End Session
+        </button>
+        <p style={{ textAlign: 'center' as const, fontSize: 10, color: 'rgba(255,255,255,0.1)', letterSpacing: '0.06em' }}>
+          {transcript.length} exchanges · or say "end" to finish
         </p>
       </div>
     </div>
