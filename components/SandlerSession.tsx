@@ -124,7 +124,7 @@ export default function SandlerSession({ autostart = false }: { autostart?: bool
     messagesRef.current = []
     transcriptRef.current = []
     seedRef.current = String.fromCharCode(65 + Math.floor(Math.random() * 26))
-  }, [stopTTS])
+  }, [stopTTS, stopSTT])
 
   const handleReview = useCallback(async () => {
     setTurn('ending')
@@ -153,7 +153,7 @@ export default function SandlerSession({ autostart = false }: { autostart?: bool
       }
     } catch { setSummary(null) }
     setSummaryLoading(false)
-  }, [stopTTS, speak])
+  }, [stopSTT, stopTTS, speak])
 
   const handleUserSpeech = useCallback(async (text: string) => {
     if (!text.trim()) { setTurn('listening'); return }
@@ -282,7 +282,9 @@ export default function SandlerSession({ autostart = false }: { autostart?: bool
           <span style={{ fontSize: 15, fontWeight: 600, color: '#000' }}>Watch & Learn</span>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             <span style={{ fontSize: 11, color: '#ccc' }}>{VERSION}</span>
-            <button onClick={() => { stopTTS(); stopSTTRef.current(); setScreen('start') }} style={{ fontSize: 13, color: '#999', background: 'none', border: 'none', cursor: 'pointer' }}>← Back</button>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <button onClick={() => { stopTTS(); stopSTTRef.current(); setDemoResult(null); setDemoQuestion(''); setDemoHistory([]); setScreen('start') }} style={{ fontSize: 13, color: '#999', background: 'none', border: 'none', cursor: 'pointer' }}>← Home</button>
+            </div>
           </div>
         </div>
 
@@ -316,7 +318,7 @@ export default function SandlerSession({ autostart = false }: { autostart?: bool
               placeholder="Type a prospect question…"
               style={{ flex: 1, padding: '14px 16px', borderRadius: 12, border: '1.5px solid #e0e0e0', fontSize: 14, color: '#000', outline: 'none', background: '#fff' }}
             />
-            <button onClick={handleDemo} disabled={demoLoading || !demoQuestion.trim()} style={{ padding: '14px 20px', background: '#000', color: '#fff', border: 'none', borderRadius: 12, fontSize: 14, fontWeight: 600, cursor: 'pointer', opacity: demoLoading || !demoQuestion.trim() ? 0.4 : 1 }}>
+            <button onClick={() => { unlockAudio(); handleDemo() }} disabled={demoLoading || !demoQuestion.trim()} style={{ padding: '14px 20px', background: '#000', color: '#fff', border: 'none', borderRadius: 12, fontSize: 14, fontWeight: 600, cursor: 'pointer', opacity: demoLoading || !demoQuestion.trim() ? 0.4 : 1 }}>
               {demoLoading ? '…' : 'Go'}
             </button>
           </div>
@@ -358,7 +360,7 @@ export default function SandlerSession({ autostart = false }: { autostart?: bool
                 </div>
               </div>
 
-              <button onClick={() => { speak(demoResult!.combined, () => {}) }} style={{ ...s.secondaryBtn, width: '100%', marginBottom: 24 }}>
+              <button onClick={() => { unlockAudio(); speak(demoResult!.combined, () => {}) }} style={{ ...s.secondaryBtn, width: '100%', marginBottom: 24 }}>
                 ▶ Play Again
               </button>
             </div>
@@ -376,6 +378,12 @@ export default function SandlerSession({ autostart = false }: { autostart?: bool
               ))}
             </div>
           )}
+        </div>
+        <div style={{ padding: '12px 20px 24px', borderTop: '1px solid #f0f0f0', flexShrink: 0 }}>
+          <button onClick={() => { stopTTS(); stopSTTRef.current(); setDemoResult(null); setDemoQuestion(''); setDemoHistory([]); setScreen('start') }}
+            style={{ ...s.primaryBtn, width: '100%' }}>
+            ← Home
+          </button>
         </div>
       </div>
     )
@@ -559,6 +567,7 @@ const s: Record<string, React.CSSProperties> = {
   infoRow: { display: 'flex', gap: 14, alignItems: 'flex-start' },
   infoNum: { width: 24, height: 24, borderRadius: '50%', background: '#000', color: '#fff', fontSize: 12, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: 1 },
   primaryBtn: { flex: 1, padding: '16px', background: '#000', border: 'none', borderRadius: 14, fontSize: 15, fontWeight: 600, color: '#fff', cursor: 'pointer', transition: 'opacity 0.2s', letterSpacing: '-0.01em' },
+  secondaryBtn: { flex: 1, padding: '16px', background: '#f5f5f7', border: 'none', borderRadius: 14, fontSize: 15, fontWeight: 600, color: '#000', cursor: 'pointer', transition: 'opacity 0.2s', letterSpacing: '-0.01em' },
   header: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '56px 20px 16px', borderBottom: '1px solid #f0f0f0', flexShrink: 0 },
   altCard: { background: '#f5f5f7', borderRadius: 12, padding: '16px', marginBottom: 12 },
   altRow: { display: 'flex', gap: 10, alignItems: 'flex-start', marginBottom: 8 },
