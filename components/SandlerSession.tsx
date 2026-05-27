@@ -80,6 +80,7 @@ export default function SandlerSession({ autostart = false }: { autostart?: bool
     setTranscript([{ speaker: 'prospect', text: opening }])
     setTurn('speaking')
 
+    unlockAudio()
     await speak(opening, async () => {
       await startSTTRef.current()
       setTurn('listening')
@@ -151,6 +152,7 @@ export default function SandlerSession({ autostart = false }: { autostart?: bool
       setTranscript([...txRef.current])
       setTurn('speaking')
       pauseSTTRef.current()
+      unlockAudio()
       await speak(reply, () => {
         setTimeout(() => { setTurn('listening'); resumeSTTRef.current() }, 400)
       })
