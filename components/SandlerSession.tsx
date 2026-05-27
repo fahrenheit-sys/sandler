@@ -1,28 +1,16 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { useDeepgram } from '../lib/useDeepgram'
-import { useTTS } from '../lib/useTTS'
+import { useTTS, unlockAudio } from '../lib/useTTS'
 
-type SessionState = 'start' | 'countdown' | 'session' | 'summary'
+const VERSION = 'v1.3'
+
+type SessionState = 'start' | 'tap-to-begin' | 'session' | 'summary'
 type TurnState = 'prospect' | 'listening' | 'thinking' | 'speaking' | 'ending'
 
 interface Message { role: 'user' | 'assistant'; content: string }
 interface TranscriptLine { speaker: 'prospect' | 'you'; text: string }
-
-interface Alternative {
-  prospect_line: string
-  salesperson_said: string
-  stroke: string
-  return: string
-  why: string
-}
-
-interface SummaryData {
-  overall_assessment: string
-  alternatives: Alternative[]
-}
-
-const ACCENT = '#c9a84c'
-const ACCENT_DIM = '#c9a84c33'
+interface Alternative { prospect_line: string; salesperson_said: string; stroke: string; return: string; why: string }
+interface SummaryData { overall_assessment: string; alternatives: Alternative[] }
 
 export default function SandlerSession({ autostart = false }: { autostart?: boolean }) {
   const [screen, setScreen] = useState<SessionState>('start')
@@ -30,90 +18,139 @@ export default function SandlerSession({ autostart = false }: { autostart?: bool
   const [turnState, setTurnState] = useState<TurnState>('prospect')
   const [transcript, setTranscript] = useState<TranscriptLine[]>([])
   const [interimText, setInterimText] = useState('')
-  const [statusText, setStatusText] = useState('')
   const [duration, setDuration] = useState(0)
   const [summary, setSummary] = useState<SummaryData | null>(null)
   const [summaryLoading, setSummaryLoading] = useState(false)
-  const [persona, setPersona] = useState('')
-  const [started, setStarted] = useState(false)
 
   const messagesRef = useRef<Message[]>([])
   const transcriptRef = useRef<TranscriptLine[]>([])
   const turnStateRef = useRef<TurnState>('prospect')
   const seedRef = useRef(String.fromCharCode(65 + Math.floor(Math.random() * 26)))
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const { speak, stop: stopTTS } = useTTS()
 
-  const setTurn = (t: TurnState) => {
-    turnStateRef.current = t
-    setTurnState(t)
-  }
+  const setTurn = (t: TurnState) => { turnStateRef.current = t; setTurnState(t) }
 
-  // Handle user speech — check for "end" keyword
+  const startSession = useCallback(async () => {
+    setScreen('session')
+    setDuration(0)
+
+    const res = await fetch('/api/chat', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'opening', seed: seedRef.current }),
+    })
+    const { text: opening } = await res.json()
+
+    messagesRef.current = [{ role: 'assistant', content: opening }]
+    transcriptRef.current = [{ speaker: 'prospect', text: opening }]
+    setTranscript([{ speaker: 'prospect', text: opening }])
+    setTurn('speaking')
+
+    await speak(opening, async () => {
+      await startSTT()
+      setTurn('listening')
+    })
+
+    timerRef.current = setInterval(() => setDuration(d => d + 1), 1000)
+  }, [speak])
+
+  // Autostart — show tap-to-begin screen with countdown
+  useEffect(() => {
+    if (!autostart) return
+    setScreen('tap-to-begin')
+    setCountdown(3)
+  }, [autostart])
+
+  useEffect(() => {
+    return () => {
+      stopTTS()
+      stopSTT()
+      if (timerRef.current) clearInterval(timerRef.current)
+      if (countdownRef.current) clearInterval(countdownRef.current)
+    }
+  }, [])
+
+  const handleTapToBegin = useCallback(() => {
+    // This tap is the user gesture — unlock iOS audio here
+    unlockAudio()
+    let count = 3
+    setCountdown(count)
+    countdownRef.current = setInterval(() => {
+      count -= 1
+      setCountdown(count)
+      if (count <= 0) {
+        if (countdownRef.current) clearInterval(countdownRef.current)
+        startSession()
+      }
+    }, 1000)
+  }, [startSession])
+
+  const handleEndSession = useCallback(() => {
+    stopTTS()
+    stopSTT()
+    if (timerRef.current) clearInterval(timerRef.current)
+    setScreen('start')
+    setTranscript([])
+    setSummary(null)
+    setTurn('prospect')
+    messagesRef.current = []
+    transcriptRef.current = []
+    seedRef.current = String.fromCharCode(65 + Math.floor(Math.random() * 26))
+  }, [stopTTS, stopSTT])
+
+  const handleReview = useCallback(async () => {
+    setTurn('ending')
+    stopSTT()
+    stopTTS()
+    setSummaryLoading(true)
+    setScreen('summary')
+    const flat = transcriptRef.current.map(t => `${t.speaker === 'you' ? 'SALESPERSON' : 'PROSPECT'}: ${t.text}`).join('\n')
+    const summaryRes = await fetch('/api/chat', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'summary', transcript: flat }),
+    })
+    const { result } = await summaryRes.json()
+    try {
+      const parsed = JSON.parse(result)
+      setSummary(parsed)
+      if (parsed.overall_assessment) {
+        await speak(`Here's your coaching summary. ${parsed.overall_assessment} Let me walk you through three alternative approaches.`, () => {
+          const speakAlt = async (i: number) => {
+            if (i >= parsed.alternatives.length) return
+            const alt = parsed.alternatives[i]
+            await speak(`Alternative ${i + 1}. When the prospect said: "${alt.prospect_line}" — a stronger stroke: "${alt.stroke}" — followed by: "${alt.return}". ${alt.why}`, () => speakAlt(i + 1))
+          }
+          speakAlt(0)
+        })
+      }
+    } catch { setSummary(null) }
+    setSummaryLoading(false)
+  }, [stopSTT, stopTTS, speak])
+
   const handleUserSpeech = useCallback(async (text: string) => {
     if (!text.trim()) { setTurn('listening'); return }
 
-    // Detect end command
-    const lower = text.toLowerCase().trim()
-    if (lower.includes('end') || lower.includes('stop') || lower === 'end.' || lower === 'stop.') {
-      setTurn('ending')
-      setStatusText('Wrapping up…')
-      stopTTS()
+    const lower = text.toLowerCase().trim().replace(/[.,!?]$/, '')
 
-      // Get a brief closing line from prospect then summarise
-      const closingRes = await fetch('/api/chat', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'chat', seed: seedRef.current, messages: [...messagesRef.current, { role: 'user', content: 'end' }] }),
-      })
-      const { text: closing } = await closingRes.json()
-
-      await speak(closing, async () => {
-        setStatusText('Analysing your session…')
-        setSummaryLoading(true)
-        setScreen('summary')
-
-        const flat = transcriptRef.current.map(t => `${t.speaker === 'you' ? 'SALESPERSON' : 'PROSPECT'}: ${t.text}`).join('\n')
-        const summaryRes = await fetch('/api/chat', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'summary', transcript: flat }),
-        })
-        const { result } = await summaryRes.json()
-        try {
-          const parsed = JSON.parse(result)
-          setSummary(parsed)
-
-          // Speak the overall assessment
-          if (parsed.overall_assessment) {
-            await speak(`Here's your coaching summary. ${parsed.overall_assessment} Let me walk you through three alternative approaches you could have used.`, () => {
-              // Speak each alternative
-              const speakAlternatives = async (index: number) => {
-                if (index >= parsed.alternatives.length) return
-                const alt = parsed.alternatives[index]
-                const text = `Alternative ${index + 1}. When the prospect said: "${alt.prospect_line}" — a stronger stroke would have been: "${alt.stroke}" — followed by the return: "${alt.return}". ${alt.why}`
-                await speak(text, () => speakAlternatives(index + 1))
-              }
-              speakAlternatives(0)
-            })
-          }
-        } catch {
-          setSummary(null)
-        }
-        setSummaryLoading(false)
-      })
+    if (lower === 'end session' || lower === 'end' || lower === 'stop' || lower.endsWith(' end') || lower.endsWith(' stop')) {
+      handleEndSession()
       return
     }
 
-    // Normal turn — add to transcript and send to AI
+    if (lower === 'review' || lower.includes('review session') || lower.includes('get review')) {
+      handleReview()
+      return
+    }
+
     const userMsg: Message = { role: 'user', content: text }
     const updated = [...messagesRef.current, userMsg]
     messagesRef.current = updated
     transcriptRef.current = [...transcriptRef.current, { speaker: 'you', text }]
     setTranscript([...transcriptRef.current])
     setInterimText('')
-
     setTurn('thinking')
-    setStatusText('Prospect thinking…')
 
     try {
       const res = await fetch('/api/chat', {
@@ -121,29 +158,17 @@ export default function SandlerSession({ autostart = false }: { autostart?: bool
         body: JSON.stringify({ action: 'chat', messages: updated, seed: seedRef.current }),
       })
       const { text: reply } = await res.json()
-
       const aiMsg: Message = { role: 'assistant', content: reply }
       messagesRef.current = [...updated, aiMsg]
       transcriptRef.current = [...transcriptRef.current, { speaker: 'prospect', text: reply }]
       setTranscript([...transcriptRef.current])
-
       setTurn('speaking')
-      setStatusText('Prospect speaking…')
-
-      // Pause mic while prospect speaks so we don't pick up TTS
       pauseSTT()
-
       await speak(reply, () => {
-        // Small delay before resuming so any TTS echo clears
-        setTimeout(() => {
-          setTurn('listening')
-          setStatusText('Your turn — speak naturally')
-          resumeSTT()
-        }, 400)
+        setTimeout(() => { setTurn('listening'); resumeSTT() }, 400)
       })
     } catch {
       setTurn('listening')
-      setStatusText('Error — speak again')
       setTimeout(() => resumeSTT(), 400)
     }
   }, [speak, stopTTS])
@@ -157,294 +182,229 @@ export default function SandlerSession({ autostart = false }: { autostart?: bool
     handleUserSpeech(text)
   }, [handleUserSpeech])
 
-  const handleSTTError = useCallback((err: string) => {
-    setStatusText(err)
-    setTurn('listening')
-  }, [])
-
   const { start: startSTT, stop: stopSTT, pause: pauseSTT, resume: resumeSTT } = useDeepgram({
     onTranscript: handleTranscript,
     onUtteranceEnd: handleUtteranceEnd,
-    onError: handleSTTError,
+    onError: (err) => { console.error(err); setTurn('listening') },
   })
-
-  const startSession = useCallback(async () => {
-    setStarted(true)
-    setScreen('session')
-    setDuration(0)
-
-    // Get opening question
-    const res = await fetch('/api/chat', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'opening', seed: seedRef.current }),
-    })
-    const { text: opening, persona: p } = await res.json()
-    setPersona(p)
-
-    messagesRef.current = [{ role: 'assistant', content: opening }]
-    transcriptRef.current = [{ speaker: 'prospect', text: opening }]
-    setTranscript([{ speaker: 'prospect', text: opening }])
-
-    setTurn('speaking')
-    setStatusText('Prospect speaking…')
-
-    await speak(opening, async () => {
-      // Start always-on listening
-      await startSTT()
-      setTurn('listening')
-      setStatusText('Your turn — speak naturally')
-    })
-
-    timerRef.current = setInterval(() => setDuration(d => d + 1), 1000)
-  }, [speak, startSTT])
-
-  useEffect(() => {
-    return () => {
-      stopTTS()
-      stopSTT()
-      if (timerRef.current) clearInterval(timerRef.current)
-    }
-  }, [])
-
-  // Autostart countdown when opened via Siri
-  useEffect(() => {
-    if (!autostart) return
-    setScreen('countdown')
-    setCountdown(3)
-    let count = 3
-    const interval = setInterval(() => {
-      count -= 1
-      setCountdown(count)
-      if (count <= 0) {
-        clearInterval(interval)
-        startSession()
-      }
-    }, 1000)
-    return () => clearInterval(interval)
-  }, [autostart])
 
   const fmt = (s: number) => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`
 
-  // ── COUNTDOWN SCREEN ──
-  if (screen === 'countdown') {
-    return (
-      <div style={{ ...s.screen, alignItems: 'center', justifyContent: 'center' }}>
-        <div style={{ fontSize: 11, letterSpacing: '0.3em', color: 'rgba(255,255,255,0.2)', marginBottom: 32 }}>◈ SANDLER TRAINER · v1.2</div>
-        <div style={{ fontSize: 100, fontWeight: 100, color: ACCENT, lineHeight: 1, marginBottom: 24, animation: 'breathe 1s ease-in-out infinite' }}>
-          {countdown}
-        </div>
-        <div style={{ fontSize: 13, letterSpacing: '0.15em', color: 'rgba(255,255,255,0.3)', textTransform: 'uppercase' as const }}>
-          Starting session…
-        </div>
-      </div>
-    )
-  }
-
-  // ── START SCREEN ──
+  // ── START ──
   if (screen === 'start') {
     return (
       <div style={s.screen}>
         <div style={s.startInner}>
-          <div style={{ fontSize: 11, letterSpacing: '0.3em', color: 'rgba(255,255,255,0.2)', marginBottom: 16 }}>◈ SANDLER · v1.2</div>
-          <h1 style={{ fontSize: 36, fontWeight: 200, letterSpacing: '0.2em', color: 'rgba(255,255,255,0.9)', marginBottom: 8 }}>STROKE + RETURN</h1>
-          <p style={{ fontSize: 11, letterSpacing: '0.15em', color: 'rgba(255,255,255,0.25)', marginBottom: 48, textTransform: 'uppercase' }}>Sandler Sales Trainer · Gym Membership</p>
+          <div style={{ fontSize: 11, letterSpacing: '0.2em', color: '#999', marginBottom: 12, textTransform: 'uppercase' as const }}>Sandler Trainer · {VERSION}</div>
+          <h1 style={{ fontSize: 40, fontWeight: 700, color: '#000', letterSpacing: '-0.02em', marginBottom: 6 }}>Stroke + Return</h1>
+          <p style={{ fontSize: 15, color: '#666', marginBottom: 48, fontWeight: 400 }}>Gym membership sales simulation</p>
 
           <div style={s.infoBlock}>
-            <div style={s.infoRow}>
-              <span style={{ color: ACCENT }}>◆</span>
-              <span>A random prospect will open with a question about price, features, or commitment</span>
-            </div>
-            <div style={s.infoRow}>
-              <span style={{ color: ACCENT }}>◆</span>
-              <span>Respond with a <strong style={{ color: 'rgba(255,255,255,0.8)' }}>stroke</strong> then a <strong style={{ color: 'rgba(255,255,255,0.8)' }}>return question</strong></span>
-            </div>
-            <div style={s.infoRow}>
-              <span style={{ color: ACCENT }}>◆</span>
-              <span>Fully hands-free once started — just speak naturally</span>
-            </div>
-            <div style={s.infoRow}>
-              <span style={{ color: ACCENT }}>◆</span>
-              <span>Say <strong style={{ color: 'rgba(255,255,255,0.8)' }}>"end"</strong> to finish — you'll get verbal coaching on 3 better alternatives</span>
-            </div>
+            {[
+              ['A random prospect opens with a question about price, features, or commitment.', '1'],
+              ['Respond with a stroke — warm acknowledgment — then a return question.', '2'],
+              ['Hands-free once started. Say "end" or tap the button to finish.', '3'],
+              ['Receive verbal coaching on 3 better alternatives.', '4'],
+            ].map(([text, num]) => (
+              <div key={num} style={s.infoRow}>
+                <div style={s.infoNum}>{num}</div>
+                <div style={{ fontSize: 14, color: '#444', lineHeight: 1.5 }}>{text}</div>
+              </div>
+            ))}
           </div>
 
-          <button onClick={startSession} style={s.startBtn}>
-            Begin Session →
+          <button onClick={() => { unlockAudio(); startSession() }} style={{ ...s.primaryBtn, width: '100%', maxWidth: 360 }}>
+            Begin Session
           </button>
         </div>
       </div>
     )
   }
 
-  // ── SUMMARY SCREEN ──
-  if (screen === 'summary') {
+  // ── TAP TO BEGIN (autostart) ──
+  if (screen === 'tap-to-begin') {
     return (
       <div style={s.screen}>
-        <div style={{ padding: '32px 20px', flex: 1, overflowY: 'auto' as const }}>
-          <div style={{ fontSize: 9, letterSpacing: '0.2em', color: ACCENT, marginBottom: 24 }}>◈ SANDLER · SESSION DEBRIEF</div>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column' as const, alignItems: 'center', justifyContent: 'center', gap: 32, padding: 40 }}>
+          <div style={{ fontSize: 11, letterSpacing: '0.2em', color: '#999', textTransform: 'uppercase' as const }}>Sandler Trainer · {VERSION}</div>
+          <h2 style={{ fontSize: 28, fontWeight: 600, color: '#000', letterSpacing: '-0.01em', textAlign: 'center' as const }}>Ready to train?</h2>
+          <button
+            onClick={handleTapToBegin}
+            style={{ ...s.primaryBtn, fontSize: 20, padding: '24px 48px', borderRadius: 20 }}
+          >
+            Tap to Begin
+          </button>
+          <p style={{ fontSize: 13, color: '#999', textAlign: 'center' as const, maxWidth: 260, lineHeight: 1.5 }}>
+            One tap unlocks audio on iPhone, then it's fully hands-free
+          </p>
+        </div>
+      </div>
+    )
+  }
+
+  // ── SUMMARY ──
+  if (screen === 'summary') {
+    return (
+      <div style={{ ...s.screen, background: '#fff' }}>
+        <div style={{ padding: '52px 24px 0', flex: 1, overflowY: 'auto' as const }}>
+          <div style={{ fontSize: 11, letterSpacing: '0.2em', color: '#999', marginBottom: 8, textTransform: 'uppercase' as const }}>Session Debrief · {VERSION}</div>
+          <h2 style={{ fontSize: 28, fontWeight: 700, color: '#000', letterSpacing: '-0.01em', marginBottom: 24 }}>Your Coaching</h2>
 
           {summaryLoading ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '40px 0' }}>
-              <div style={{ width: 8, height: 8, borderRadius: '50%', background: ACCENT, animation: 'blink 0.9s ease-in-out infinite' }} />
-              <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: 13 }}>Analysing your Sandler technique…</span>
+              <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#000', animation: 'blink 0.9s ease-in-out infinite' }} />
+              <span style={{ color: '#999', fontSize: 14 }}>Analysing your session…</span>
             </div>
           ) : summary ? (
             <>
-              <div style={{ fontSize: 13, color: 'rgba(255,255,255,0.6)', lineHeight: 1.7, marginBottom: 32, padding: '16px', background: 'rgba(255,255,255,0.03)', borderRadius: 8, borderLeft: `2px solid ${ACCENT}` }}>
+              <div style={{ fontSize: 15, color: '#333', lineHeight: 1.7, marginBottom: 36, padding: '16px 18px', background: '#f5f5f7', borderRadius: 12 }}>
                 {summary.overall_assessment}
               </div>
 
-              <div style={{ fontSize: 9, letterSpacing: '0.2em', color: 'rgba(255,255,255,0.2)', marginBottom: 16 }}>3 ALTERNATIVE APPROACHES</div>
+              <div style={{ fontSize: 11, letterSpacing: '0.15em', color: '#999', marginBottom: 16, textTransform: 'uppercase' as const }}>3 Alternative Approaches</div>
 
               {(summary.alternatives || []).slice(0, 3).map((alt, i) => (
                 <div key={i} style={s.altCard}>
-                  <div style={{ fontSize: 9, color: ACCENT, letterSpacing: '0.15em', marginBottom: 10 }}>ALTERNATIVE {i + 1}</div>
-
-                  <div style={s.altRow}>
-                    <span style={s.altLabel}>PROSPECT</span>
-                    <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.4)', fontStyle: 'italic' }}>"{alt.prospect_line}"</span>
-                  </div>
-                  <div style={s.altRow}>
-                    <span style={s.altLabel}>YOU SAID</span>
-                    <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.4)', fontStyle: 'italic' }}>"{alt.salesperson_said}"</span>
-                  </div>
-                  <div style={{ borderTop: '1px solid rgba(255,255,255,0.06)', margin: '10px 0' }} />
-                  <div style={s.altRow}>
-                    <span style={{ ...s.altLabel, color: '#00d4aa' }}>STROKE</span>
-                    <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.75)' }}>"{alt.stroke}"</span>
-                  </div>
-                  <div style={s.altRow}>
-                    <span style={{ ...s.altLabel, color: '#00d4aa' }}>RETURN</span>
-                    <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.75)' }}>"{alt.return}"</span>
-                  </div>
-                  <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.35)', marginTop: 8, lineHeight: 1.5 }}>{alt.why}</div>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: '#000', letterSpacing: '0.05em', marginBottom: 12 }}>ALTERNATIVE {i + 1}</div>
+                  <div style={s.altRow}><span style={s.altLabel}>Prospect</span><span style={s.altValue}>"{alt.prospect_line}"</span></div>
+                  <div style={s.altRow}><span style={s.altLabel}>You said</span><span style={{ ...s.altValue, color: '#999' }}>"{alt.salesperson_said}"</span></div>
+                  <div style={{ borderTop: '1px solid #e5e5e5', margin: '10px 0' }} />
+                  <div style={s.altRow}><span style={{ ...s.altLabel, color: '#000', fontWeight: 600 }}>Stroke</span><span style={{ ...s.altValue, color: '#000' }}>"{alt.stroke}"</span></div>
+                  <div style={s.altRow}><span style={{ ...s.altLabel, color: '#000', fontWeight: 600 }}>Return</span><span style={{ ...s.altValue, color: '#000' }}>"{alt.return}"</span></div>
+                  <div style={{ fontSize: 13, color: '#666', marginTop: 8, lineHeight: 1.5 }}>{alt.why}</div>
                 </div>
               ))}
 
-              <div style={{ fontSize: 9, letterSpacing: '0.2em', color: 'rgba(255,255,255,0.2)', marginTop: 24, marginBottom: 12 }}>TRANSCRIPT</div>
+              <div style={{ fontSize: 11, letterSpacing: '0.15em', color: '#999', marginTop: 28, marginBottom: 12, textTransform: 'uppercase' as const }}>Transcript</div>
               {transcriptRef.current.map((t, i) => (
-                <div key={i} style={s.txLine}>
-                  <span style={{ fontSize: 9, minWidth: 28, color: t.speaker === 'you' ? ACCENT : 'rgba(255,255,255,0.25)', textTransform: 'uppercase' as const }}>
+                <div key={i} style={{ display: 'flex', gap: 10, alignItems: 'flex-start', paddingBottom: 10, borderBottom: '1px solid #f0f0f0', marginBottom: 4 }}>
+                  <span style={{ fontSize: 10, minWidth: 32, color: t.speaker === 'you' ? '#000' : '#999', textTransform: 'uppercase' as const, fontWeight: 600, paddingTop: 2 }}>
                     {t.speaker === 'you' ? 'YOU' : 'PRO'}
                   </span>
-                  <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.5)', lineHeight: 1.5 }}>{t.text}</span>
+                  <span style={{ fontSize: 13, color: t.speaker === 'you' ? '#000' : '#666', lineHeight: 1.5 }}>{t.text}</span>
                 </div>
               ))}
+              <div style={{ height: 40 }} />
             </>
           ) : (
-            <div style={{ color: 'rgba(255,255,255,0.35)', fontSize: 13 }}>Session too short to analyse.</div>
+            <div style={{ color: '#999', fontSize: 14 }}>Session too short to analyse.</div>
           )}
         </div>
 
-        <div style={{ padding: '16px 20px 24px' }}>
-          <button onClick={() => { stopTTS(); setScreen('start'); setTranscript([]); setSummary(null); setStarted(false); seedRef.current = String.fromCharCode(65 + Math.floor(Math.random() * 26)) }}
-            style={{ ...s.startBtn, fontSize: 11 }}>
-            New Session →
+        <div style={{ padding: '16px 24px 32px', borderTop: '1px solid #f0f0f0' }}>
+          <button onClick={() => {
+            stopTTS()
+            setScreen('start')
+            setTranscript([])
+            setSummary(null)
+            seedRef.current = String.fromCharCode(65 + Math.floor(Math.random() * 26))
+          }} style={{ ...s.primaryBtn, width: '100%' }}>
+            New Session
           </button>
         </div>
       </div>
     )
   }
 
-  // ── SESSION SCREEN ──
-  const orbAnim = turnState === 'thinking' ? 'breathe 1.5s ease-in-out infinite'
-    : turnState === 'speaking' ? 'speak-anim 0.6s ease-in-out infinite'
-    : 'none'
+  // ── SESSION ──
+  const isListening = turnState === 'listening'
+  const isSpeaking = turnState === 'speaking'
+  const isThinking = turnState === 'thinking'
 
-  const ringOpacity = turnState === 'listening' ? 0.5 : 0
+  const orbColor = isListening ? '#000' : isSpeaking ? '#333' : '#666'
+  const orbAnim = isThinking ? 'breathe 1.5s ease-in-out infinite' : isSpeaking ? 'speak-anim 0.6s ease-in-out infinite' : 'none'
 
   return (
-    <div style={s.screen}>
+    <div style={{ ...s.screen, background: '#fff' }}>
       {/* Header */}
       <div style={s.header}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <div style={{ fontSize: 9, letterSpacing: '0.15em', color: ACCENT, padding: '4px 10px', border: `1px solid ${ACCENT}44`, borderRadius: 4, background: `${ACCENT}11` }}>
-            ◈ SANDLER
-          </div>
-          <span style={{ color: 'rgba(255,255,255,0.25)', fontSize: 11, fontFamily: 'monospace' }}>{fmt(duration)}</span>
+          <span style={{ fontSize: 15, fontWeight: 600, color: '#000' }}>Sandler</span>
+          <span style={{ fontSize: 13, color: '#999' }}>{fmt(duration)}</span>
         </div>
-        <span style={{ fontSize: 8, color: 'rgba(255,255,255,0.1)', letterSpacing: '0.1em', fontFamily: 'monospace' }}>
-          v1.2
-        </span>
+        <span style={{ fontSize: 11, color: '#ccc', letterSpacing: '0.05em' }}>{VERSION}</span>
       </div>
 
       {/* Orb */}
-      <div style={{ display: 'flex', flexDirection: 'column' as const, alignItems: 'center', gap: 14, padding: '28px 0 18px', flexShrink: 0 }}>
+      <div style={{ display: 'flex', flexDirection: 'column' as const, alignItems: 'center', gap: 16, padding: '32px 0 20px', flexShrink: 0 }}>
         <div style={{ position: 'relative' as const, width: 140, height: 140, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          {[110, 128].map((size, i) => (
-            <div key={i} style={{ position: 'absolute' as const, width: size, height: size, borderRadius: '50%', border: `1px solid ${ACCENT}`, opacity: ringOpacity * (i === 0 ? 1 : 0.5), animation: ringOpacity > 0 ? `pulse-ring 1.2s ease-in-out ${i * 0.2}s infinite` : 'none', transition: 'opacity 0.4s' }} />
+          {[110, 130].map((size, i) => (
+            <div key={i} style={{ position: 'absolute' as const, width: size, height: size, borderRadius: '50%', border: '1px solid #000', opacity: isListening ? (i === 0 ? 0.15 : 0.07) : 0, animation: isListening ? `pulse-ring 1.4s ease-in-out ${i * 0.2}s infinite` : 'none', transition: 'opacity 0.4s' }} />
           ))}
-          <div style={{ width: 72, height: 72, borderRadius: '50%', background: `radial-gradient(circle at 35% 35%, ${ACCENT}, #5a3800)`, boxShadow: `0 0 ${35}px ${ACCENT}${turnState === 'listening' ? '55' : '33'}`, animation: orbAnim, transition: 'box-shadow 0.4s' }} />
+          <div style={{ width: 72, height: 72, borderRadius: '50%', background: orbColor, boxShadow: isListening ? '0 0 30px rgba(0,0,0,0.15)' : 'none', animation: orbAnim, transition: 'background 0.4s, box-shadow 0.4s' }} />
         </div>
 
-        <div style={{ fontSize: 11, letterSpacing: '0.14em', color: 'rgba(255,255,255,0.3)', textTransform: 'uppercase' as const }}>
+        <div style={{ fontSize: 14, color: '#999', fontWeight: 400 }}>
           {turnState === 'prospect' ? 'Preparing…'
-            : turnState === 'speaking' ? 'Prospect speaking…'
-            : turnState === 'thinking' ? 'Prospect thinking…'
+            : isSpeaking ? 'Prospect speaking…'
+            : isThinking ? 'Thinking…'
             : turnState === 'ending' ? 'Ending session…'
             : 'Your turn'}
         </div>
 
-        {turnState === 'listening' && interimText && (
-          <div style={{ maxWidth: 280, textAlign: 'center' as const, fontSize: 13, color: 'rgba(255,255,255,0.5)', fontStyle: 'italic', background: 'rgba(255,255,255,0.04)', padding: '8px 14px', borderRadius: 8, lineHeight: 1.5 }}>
+        {isListening && interimText && (
+          <div style={{ maxWidth: 300, textAlign: 'center' as const, fontSize: 14, color: '#666', fontStyle: 'italic', background: '#f5f5f7', padding: '10px 16px', borderRadius: 10, lineHeight: 1.5 }}>
             {interimText}
           </div>
         )}
       </div>
 
       {/* Sandler hint */}
-      {turnState === 'listening' && (
-        <div style={{ margin: '0 20px 12px', padding: '10px 14px', background: `${ACCENT}0a`, border: `1px solid ${ACCENT}22`, borderRadius: 8, fontSize: 11, color: `${ACCENT}cc`, lineHeight: 1.6, flexShrink: 0 }}>
-          <strong>Stroke</strong> → acknowledge their question warmly &nbsp;·&nbsp; <strong>Return</strong> → ask a curious question back
+      {isListening && (
+        <div style={{ margin: '0 20px 14px', padding: '12px 16px', background: '#f5f5f7', borderRadius: 10, fontSize: 13, color: '#555', lineHeight: 1.6, flexShrink: 0 }}>
+          <strong style={{ color: '#000' }}>Stroke</strong> — acknowledge warmly &nbsp;·&nbsp; <strong style={{ color: '#000' }}>Return</strong> — ask a curious question back
         </div>
       )}
 
       {/* Transcript */}
       <div style={{ flex: 1, overflowY: 'auto' as const, padding: '0 20px', display: 'flex', flexDirection: 'column' as const, gap: 10 }}>
         {transcript.slice(-8).map((t, i, arr) => (
-          <div key={i} style={{ display: 'flex', gap: 10, alignItems: 'flex-start', paddingBottom: 8, borderBottom: '1px solid rgba(255,255,255,0.04)', opacity: arr.length > 4 && i < 2 ? 0.3 : 1, animation: i === arr.length - 1 ? 'fade-in 0.3s ease' : 'none' }}>
-            <span style={{ fontSize: 9, letterSpacing: '0.1em', minWidth: 28, color: t.speaker === 'you' ? ACCENT : 'rgba(255,255,255,0.25)', textTransform: 'uppercase' as const, paddingTop: 2 }}>
+          <div key={i} style={{ display: 'flex', gap: 10, alignItems: 'flex-start', paddingBottom: 10, borderBottom: '1px solid #f0f0f0', opacity: arr.length > 4 && i < 2 ? 0.4 : 1, animation: i === arr.length - 1 ? 'fade-in 0.3s ease' : 'none' }}>
+            <span style={{ fontSize: 10, minWidth: 28, color: t.speaker === 'you' ? '#000' : '#bbb', textTransform: 'uppercase' as const, fontWeight: 600, paddingTop: 3 }}>
               {t.speaker === 'you' ? 'YOU' : 'PRO'}
             </span>
-            <span style={{ fontSize: 13, lineHeight: 1.55, color: t.speaker === 'you' ? 'rgba(255,255,255,0.85)' : 'rgba(255,255,255,0.45)' }}>
+            <span style={{ fontSize: 14, lineHeight: 1.55, color: t.speaker === 'you' ? '#000' : '#888' }}>
               {t.text}
             </span>
           </div>
         ))}
       </div>
 
-      <div style={{ padding: '12px 20px 20px', flexShrink: 0, display: 'flex', flexDirection: 'column' as const, alignItems: 'center', gap: 10 }}>
+      {/* Buttons */}
+      <div style={{ padding: '14px 20px 28px', flexShrink: 0, display: 'flex', gap: 10 }}>
         <button
-          onClick={() => handleUserSpeech('end')}
+          onClick={handleEndSession}
           disabled={turnState === 'ending'}
-          style={{
-            width: '100%', maxWidth: 340, padding: '14px',
-            background: 'transparent', border: '1px solid rgba(255,255,255,0.12)',
-            borderRadius: 10, fontSize: 11, letterSpacing: '0.14em',
-            color: 'rgba(255,255,255,0.3)', cursor: 'pointer',
-            textTransform: 'uppercase' as const, transition: 'all 0.2s',
-            opacity: turnState === 'ending' ? 0.4 : 1,
-          }}
+          style={{ ...s.secondaryBtn, opacity: turnState === 'ending' ? 0.4 : 1 }}
         >
-          ◼ End Session
+          End Session
         </button>
-        <p style={{ textAlign: 'center' as const, fontSize: 10, color: 'rgba(255,255,255,0.1)', letterSpacing: '0.06em' }}>
-          {transcript.length} exchanges · or say "end" to finish
-        </p>
+        <button
+          onClick={handleReview}
+          disabled={turnState === 'ending'}
+          style={{ ...s.primaryBtn, flex: 1, opacity: turnState === 'ending' ? 0.4 : 1 }}
+        >
+          Review
+        </button>
       </div>
+      <p style={{ textAlign: 'center' as const, fontSize: 12, color: '#ccc', paddingBottom: 16, flexShrink: 0, letterSpacing: '0.02em' }}>
+        {transcript.length} exchanges · say "end session" or "review"
+      </p>
     </div>
   )
 }
 
 const s: Record<string, React.CSSProperties> = {
-  screen: { height: '100dvh', background: '#0a0a0a', display: 'flex', flexDirection: 'column', paddingBottom: 'env(safe-area-inset-bottom)' },
-  startInner: { flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '40px 28px', textAlign: 'center' },
-  infoBlock: { display: 'flex', flexDirection: 'column', gap: 14, marginBottom: 40, textAlign: 'left', width: '100%', maxWidth: 340 },
-  infoRow: { display: 'flex', gap: 12, alignItems: 'flex-start', fontSize: 12, color: 'rgba(255,255,255,0.4)', lineHeight: 1.55 },
-  startBtn: { width: '100%', maxWidth: 320, padding: '16px', background: 'transparent', border: `1px solid ${ACCENT}55`, color: ACCENT, borderRadius: 10, fontSize: 13, letterSpacing: '0.15em', cursor: 'pointer', transition: 'all 0.2s' },
-  header: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 20px', borderBottom: '1px solid rgba(255,255,255,0.05)', flexShrink: 0 },
-  altCard: { background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 10, padding: '16px', marginBottom: 12 },
+  screen: { height: '100dvh', background: '#fff', display: 'flex', flexDirection: 'column', paddingBottom: 'env(safe-area-inset-bottom)' },
+  startInner: { flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'flex-start', justifyContent: 'center', padding: '40px 28px' },
+  infoBlock: { display: 'flex', flexDirection: 'column', gap: 16, marginBottom: 40, width: '100%', maxWidth: 360 },
+  infoRow: { display: 'flex', gap: 14, alignItems: 'flex-start' },
+  infoNum: { width: 24, height: 24, borderRadius: '50%', background: '#000', color: '#fff', fontSize: 12, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: 1 },
+  primaryBtn: { flex: 1, padding: '16px', background: '#000', border: 'none', borderRadius: 14, fontSize: 15, fontWeight: 600, color: '#fff', cursor: 'pointer', transition: 'opacity 0.2s', letterSpacing: '-0.01em' },
+  secondaryBtn: { flex: 1, padding: '16px', background: '#f5f5f7', border: 'none', borderRadius: 14, fontSize: 15, fontWeight: 600, color: '#000', cursor: 'pointer', transition: 'opacity 0.2s', letterSpacing: '-0.01em' },
+  header: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '56px 20px 16px', borderBottom: '1px solid #f0f0f0', flexShrink: 0 },
+  altCard: { background: '#f5f5f7', borderRadius: 12, padding: '16px', marginBottom: 12 },
   altRow: { display: 'flex', gap: 10, alignItems: 'flex-start', marginBottom: 8 },
-  altLabel: { fontSize: 8, letterSpacing: '0.15em', color: 'rgba(255,255,255,0.2)', minWidth: 52, paddingTop: 2, textTransform: 'uppercase' as const },
-  txLine: { display: 'flex', gap: 10, alignItems: 'flex-start', paddingBottom: 6, borderBottom: '1px solid rgba(255,255,255,0.04)', marginBottom: 2 },
+  altLabel: { fontSize: 11, color: '#999', minWidth: 56, paddingTop: 2, fontWeight: 500 },
+  altValue: { fontSize: 13, color: '#333', lineHeight: 1.5, flex: 1 },
 }
