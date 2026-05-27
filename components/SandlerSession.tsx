@@ -28,6 +28,8 @@ export default function SandlerSession({ autostart = false }: { autostart?: bool
   const seedRef = useRef(String.fromCharCode(65 + Math.floor(Math.random() * 26)))
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const pauseSTTRef = useRef<() => void>(() => {})
+  const resumeSTTRef = useRef<() => void>(() => {})
 
   const { speak, stop: stopTTS } = useTTS()
 
@@ -98,7 +100,7 @@ export default function SandlerSession({ autostart = false }: { autostart?: bool
     messagesRef.current = []
     transcriptRef.current = []
     seedRef.current = String.fromCharCode(65 + Math.floor(Math.random() * 26))
-  }, [stopTTS])
+  }, [stopTTS, stopSTT])
 
   const handleReview = useCallback(async () => {
     setTurn('ending')
@@ -127,7 +129,7 @@ export default function SandlerSession({ autostart = false }: { autostart?: bool
       }
     } catch { setSummary(null) }
     setSummaryLoading(false)
-  }, [stopTTS, speak])
+  }, [stopSTT, stopTTS, speak])
 
   const handleUserSpeech = useCallback(async (text: string) => {
     if (!text.trim()) { setTurn('listening'); return }
@@ -163,13 +165,13 @@ export default function SandlerSession({ autostart = false }: { autostart?: bool
       transcriptRef.current = [...transcriptRef.current, { speaker: 'prospect', text: reply }]
       setTranscript([...transcriptRef.current])
       setTurn('speaking')
-      pauseSTT()
+      pauseSTTRef.current()
       await speak(reply, () => {
-        setTimeout(() => { setTurn('listening'); resumeSTT() }, 400)
+        setTimeout(() => { setTurn('listening'); resumeSTTRef.current() }, 400)
       })
     } catch {
       setTurn('listening')
-      setTimeout(() => resumeSTT(), 400)
+      setTimeout(() => resumeSTTRef.current(), 400)
     }
   }, [speak, stopTTS])
 
@@ -187,6 +189,10 @@ export default function SandlerSession({ autostart = false }: { autostart?: bool
     onUtteranceEnd: handleUtteranceEnd,
     onError: (err) => { console.error(err); setTurn('listening') },
   })
+
+  // Keep refs in sync so handleUserSpeech can call them before declaration order matters
+  pauseSTTRef.current = pauseSTT
+  resumeSTTRef.current = resumeSTT
 
   const fmt = (s: number) => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`
 
