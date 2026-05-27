@@ -42,6 +42,7 @@ export default function SandlerSession({ autostart = false }: { autostart?: bool
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const pauseSTTRef = useRef<() => void>(() => {})
   const resumeSTTRef = useRef<() => void>(() => {})
+  const stopSTTRef = useRef<() => void>(() => {})
 
   const { speak, stop: stopTTS } = useTTS()
 
@@ -91,7 +92,7 @@ export default function SandlerSession({ autostart = false }: { autostart?: bool
   useEffect(() => {
     return () => {
       stopTTS()
-      stopSTT()
+      stopSTTRef.current()
       if (timerRef.current) clearInterval(timerRef.current)
       if (countdownRef.current) clearInterval(countdownRef.current)
     }
@@ -114,7 +115,7 @@ export default function SandlerSession({ autostart = false }: { autostart?: bool
 
   const handleEndSession = useCallback(() => {
     stopTTS()
-    stopSTT()
+    stopSTTRef.current()
     if (timerRef.current) clearInterval(timerRef.current)
     setScreen('start')
     setTranscript([])
@@ -123,11 +124,11 @@ export default function SandlerSession({ autostart = false }: { autostart?: bool
     messagesRef.current = []
     transcriptRef.current = []
     seedRef.current = String.fromCharCode(65 + Math.floor(Math.random() * 26))
-  }, [stopTTS])
+  }, [stopTTS, stopSTT])
 
   const handleReview = useCallback(async () => {
     setTurn('ending')
-    stopSTT()
+    stopSTTRef.current()
     stopTTS()
     setSummaryLoading(true)
     setScreen('summary')
@@ -152,7 +153,7 @@ export default function SandlerSession({ autostart = false }: { autostart?: bool
       }
     } catch { setSummary(null) }
     setSummaryLoading(false)
-  }, [stopTTS, speak])
+  }, [stopSTT, stopTTS, speak])
 
   const handleUserSpeech = useCallback(async (text: string) => {
     if (!text.trim()) { setTurn('listening'); return }
@@ -216,6 +217,7 @@ export default function SandlerSession({ autostart = false }: { autostart?: bool
   // Keep refs in sync so handleUserSpeech can call them before declaration order matters
   pauseSTTRef.current = pauseSTT
   resumeSTTRef.current = resumeSTT
+  stopSTTRef.current = stopSTT
 
   const fmt = (s: number) => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`
 
@@ -280,7 +282,7 @@ export default function SandlerSession({ autostart = false }: { autostart?: bool
           <span style={{ fontSize: 15, fontWeight: 600, color: '#000' }}>Watch & Learn</span>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             <span style={{ fontSize: 11, color: '#ccc' }}>{VERSION}</span>
-            <button onClick={() => { stopTTS(); setScreen('start') }} style={{ fontSize: 13, color: '#999', background: 'none', border: 'none', cursor: 'pointer' }}>← Back</button>
+            <button onClick={() => { stopTTS(); stopSTTRef.current(); setScreen('start') }} style={{ fontSize: 13, color: '#999', background: 'none', border: 'none', cursor: 'pointer' }}>← Back</button>
           </div>
         </div>
 
@@ -444,9 +446,13 @@ export default function SandlerSession({ autostart = false }: { autostart?: bool
         <div style={{ padding: '16px 24px 32px', borderTop: '1px solid #f0f0f0' }}>
           <button onClick={() => {
             stopTTS()
+            stopSTTRef.current()
             setScreen('start')
             setTranscript([])
             setSummary(null)
+            setTurn('prospect')
+            messagesRef.current = []
+            transcriptRef.current = []
             seedRef.current = String.fromCharCode(65 + Math.floor(Math.random() * 26))
           }} style={{ ...s.primaryBtn, width: '100%' }}>
             New Session
@@ -553,6 +559,7 @@ const s: Record<string, React.CSSProperties> = {
   infoRow: { display: 'flex', gap: 14, alignItems: 'flex-start' },
   infoNum: { width: 24, height: 24, borderRadius: '50%', background: '#000', color: '#fff', fontSize: 12, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: 1 },
   primaryBtn: { flex: 1, padding: '16px', background: '#000', border: 'none', borderRadius: 14, fontSize: 15, fontWeight: 600, color: '#fff', cursor: 'pointer', transition: 'opacity 0.2s', letterSpacing: '-0.01em' },
+  secondaryBtn: { flex: 1, padding: '16px', background: '#f5f5f7', border: 'none', borderRadius: 14, fontSize: 15, fontWeight: 600, color: '#000', cursor: 'pointer', transition: 'opacity 0.2s', letterSpacing: '-0.01em' },
   header: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '56px 20px 16px', borderBottom: '1px solid #f0f0f0', flexShrink: 0 },
   altCard: { background: '#f5f5f7', borderRadius: 12, padding: '16px', marginBottom: 12 },
   altRow: { display: 'flex', gap: 10, alignItems: 'flex-start', marginBottom: 8 },
